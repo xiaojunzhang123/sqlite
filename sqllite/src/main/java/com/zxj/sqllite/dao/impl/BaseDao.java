@@ -3,6 +3,7 @@ package com.zxj.sqllite.dao.impl;
 import android.content.ContentValues;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
+import android.text.TextUtils;
 
 import com.zxj.sqllite.annotation.DBField;
 import com.zxj.sqllite.annotation.DBTable;
@@ -11,6 +12,7 @@ import com.zxj.sqllite.dao.IBaseDao;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -18,22 +20,44 @@ import java.util.Set;
 public class BaseDao<T> implements IBaseDao<T> {
 
     private SQLiteDatabase sqLiteDatabase;
-    private Map<String, String> cacheMap;
+    private Map<String, Field> cacheMap;
     private String tableName;
     private Class clazz;
 
-    public BaseDao(SQLiteDatabase sqLiteDatabase, Class clazz) {
+    public BaseDao(SQLiteDatabase sqLiteDatabase, Class<T> clazz) {
         this.sqLiteDatabase = sqLiteDatabase;
         this.clazz = clazz;
         //创建表
         createTable(clazz);
-        //获取表中的所有字段
-        getFields(clazz);
+        //缓存表中和clazz中都有的字段
+        initCacheMap();
+    }
+
+    private void initCacheMap() {
+        cacheMap = new HashMap<>();
+        String sql = "select * from " + tableName + " limit 0";
+        Cursor cursor = sqLiteDatabase.rawQuery(sql, null);
+        String[] columnNames = cursor.getColumnNames();
+        Field[] declaredFields = clazz.getDeclaredFields();
+        for (String columnName : columnNames) {
+            for (Field field : declaredFields) {
+                DBField dbField = field.getAnnotation(DBField.class);
+                if (dbField == null) {
+                    continue;
+                }
+                String dbFieldName = dbField.value();
+                if (columnName.equals(dbFieldName)) {
+                    cacheMap.put(columnName, field);
+                    break;
+                }
+            }
+        }
     }
 
     @Override
     public long insert(T t) {
-        ContentValues contentValues = getContentValues(t);
+        Map<String, String> values = getValues(t);
+        ContentValues contentValues = getContentValues(values);
         return sqLiteDatabase.insert(tableName, null, contentValues);
     }
 
@@ -42,34 +66,51 @@ public class BaseDao<T> implements IBaseDao<T> {
         List<T> list = new ArrayList<>();
         String queryStr = "select * from " + tableName;
         try {
-            Cursor cursor = sqLiteDatabase.rawQuery(queryStr,null);
-            Set<String> keySet = cacheMap.keySet();
+            Cursor cursor = sqLiteDatabase.rawQuery(queryStr, null);
             while (cursor.moveToNext()) {
+                Iterator<String> iterator = cacheMap.keySet().iterator();
                 T t = (T) clazz.newInstance();
-                for (String fieldName : keySet) {
-                    String fieldDBName = cacheMap.get(fieldName);
-                    int fieldType =  cursor.getType(cursor.getColumnIndex(fieldDBName));
+                while (iterator.hasNext()) {
                     Object fieldDBValue = null;
-                    if (fieldType == Cursor.FIELD_TYPE_NULL){
-                    }else if(fieldType == Cursor.FIELD_TYPE_INTEGER){
-                        fieldDBValue = cursor.getInt(cursor.getColumnIndex(fieldDBName));
-                    }else if(fieldType == Cursor.FIELD_TYPE_FLOAT){
-                        fieldDBValue = cursor.getFloat(cursor.getColumnIndex(fieldDBName));
-                    }else if(fieldType == Cursor.FIELD_TYPE_STRING){
-                       fieldDBValue = cursor.getString(cursor.getColumnIndex(fieldDBName));
-                    }else if(fieldType == Cursor.FIELD_TYPE_BLOB){
-                        fieldDBValue = cursor.getBlob(cursor.getColumnIndex(fieldDBName));
+                    String columnName = iterator.next();
+                    int columnIndex = cursor.getColumnIndex(columnName);
+                    int columnType = cursor.getType(columnIndex);
+                    if (columnType == Cursor.FIELD_TYPE_NULL) {
+                    } else if (columnType == Cursor.FIELD_TYPE_INTEGER) {
+                        fieldDBValue = cursor.getInt(columnIndex);
+                    } else if (columnType == Cursor.FIELD_TYPE_FLOAT) {
+                        fieldDBValue = cursor.getFloat(columnIndex);
+                    } else if (columnType == Cursor.FIELD_TYPE_STRING) {
+                        fieldDBValue = cursor.getString(columnIndex);
+                    } else if (columnType == Cursor.FIELD_TYPE_BLOB) {
+                        fieldDBValue = cursor.getBlob(columnIndex);
                     }
-                    Field field = t.getClass().getDeclaredField(fieldName);
+                    Field field = cacheMap.get(columnName);
                     field.setAccessible(true);
                     field.set(t, fieldDBValue);
                 }
                 list.add(t);
             }
+            cursor.close();
         } catch (Exception e) {
             e.printStackTrace();
         }
         return list;
+    }
+
+    @Override
+    public List<T> query(T t) {
+        return null;
+    }
+
+    @Override
+    public long delete(T t) {
+        return 0;
+    }
+
+    @Override
+    public long update(T t) {
+        return 0;
     }
 
     /**
@@ -82,7 +123,7 @@ public class BaseDao<T> implements IBaseDao<T> {
         if (dbTable != null) {
             tableName = dbTable.value();
         }
-        stringBuilder.append(tableName + "(");
+        stringBuilder.append(tableName + "(_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,");
         //获取所有的成员变量属性
         Field[] declaredFields = clazz.getDeclaredFields();
         for (Field field : declaredFields) {
@@ -110,44 +151,49 @@ public class BaseDao<T> implements IBaseDao<T> {
         }
         stringBuilder.append(")");
         String sqlString = stringBuilder.toString();
-        sqLiteDatabase.execSQL(sqlString);
+        try {
+            sqLiteDatabase.execSQL(sqlString);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
     }
 
-    /**
-     * 获取存储类中所有带注解的成员变量
-     *
-     * @return
-     */
-    private Map<String, String> getFields(Class clazz) {
-        cacheMap = new HashMap<>();
+    private Map<String, String> getValues(T t) {
+        Map<String, String> map = new HashMap<>();
         //获取所有的成员变量属性
-        Field[] declaredFields = clazz.getDeclaredFields();
-        for (Field field : declaredFields) {
-            DBField dbField = field.getAnnotation(DBField.class);
-            if (dbField == null) {
+        Iterator<Field> iterator = cacheMap.values().iterator();
+        while (iterator.hasNext()) {
+            Field field = iterator.next();
+            field.setAccessible(true);
+            Object object = null;
+            try {
+                object = field.get(t);
+            } catch (IllegalAccessException e) {
+                e.printStackTrace();
+            }
+            if (object == null) {
                 continue;
             }
-            String fieldDBName = dbField.value();
-            cacheMap.put(field.getName(), fieldDBName);
+            String fieldValue = object.toString();
+            String dbFieldName = field.getAnnotation(DBField.class).value();
+            if (!TextUtils.isEmpty(fieldValue) && !TextUtils.isEmpty(dbFieldName)) {
+                map.put(dbFieldName, fieldValue);
+            }
         }
-        return cacheMap;
+        return map;
     }
 
-    private ContentValues getContentValues(T t) {
+    private ContentValues getContentValues(Map<String, String> map) {
         ContentValues contentValues = new ContentValues();
-        Field[] fields = t.getClass().getDeclaredFields();
-        for (Field field : fields) {
-            if (cacheMap.containsKey(field.getName())) {
-                String fieldDBName = cacheMap.get(field.getName());
-                field.setAccessible(true);
-                try {
-                    String fieldValue = field.get(t).toString();
-                    contentValues.put(fieldDBName, fieldValue);
-                } catch (IllegalAccessException e) {
-                    e.printStackTrace();
-                }
+        Set<String> keySet = map.keySet();
+        for (String key : keySet) {
+            String value = map.get(key);
+            if (value != null) {
+                contentValues.put(key, value);
             }
         }
         return contentValues;
     }
+
 }

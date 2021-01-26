@@ -18,8 +18,9 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         BaseDao<User> userBaseDao = DataBaseFactory.getInstance(this).setDataBasePath("zhangxiaojun").getBaseDao(User.class);
-        userBaseDao.insert(new User("zhangsan",20));
+        userBaseDao.insert(new User("zhangsan111111",20));
         List<User> list = userBaseDao.queryAll();
         Log.d("========>",list.toString()) ;
+
     }
 }

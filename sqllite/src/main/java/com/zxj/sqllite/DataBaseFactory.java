@@ -42,4 +42,5 @@ public class DataBaseFactory {
         SQLiteDatabase sqLiteDatabase = SQLiteDatabase.openOrCreateDatabase(dataBasePath, null);
         return new BaseDao<T>(sqLiteDatabase, clazz);
     }
+
 }
